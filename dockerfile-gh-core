@@ -29,12 +29,18 @@ RUN bash $INST_SCRIPTS/package_rules/package_rules.sh && rm -rf $INST_SCRIPTS/pa
 ### the default `ubuntu` user (uid 1000) for us — must run before we
 ### claim uid 1000 for ghuser below.
 ###
-### Patch out the `add-apt-repository ppa:kisak/turtle` mesa-update
-### step for non-noble Ubuntu — launchpad isn't reachable from our
-### build environment and the base distro mesa is sufficient for our
-### Qt6 / non-GPU workloads.
+### Two sed patches:
+###  1. drop `add-apt-repository ppa:kisak/turtle` + `apt full-upgrade`
+###     — launchpad CDN isn't reachable from our build network, and
+###     the base distro mesa is sufficient for our Qt6 / non-GPU
+###     workloads.
+###  2. drop `software-properties-common` from the tool install list
+###     — it's gone from Debian trixie and not actually needed
+###     (we removed the only thing that used it above).
 COPY ./src/ubuntu/install/tools $INST_SCRIPTS/tools/
 RUN sed -i '/add-apt-repository ppa:kisak/d; /apt full-upgrade -y/d' \
+    $INST_SCRIPTS/tools/install_tools.sh && \
+    sed -i 's/ software-properties-common//g' \
     $INST_SCRIPTS/tools/install_tools.sh && \
     bash $INST_SCRIPTS/tools/install_tools.sh && \
     rm -rf $INST_SCRIPTS/tools/
@@ -93,8 +99,11 @@ RUN apt-get update && \
 
 COPY ./src/common/install/kasm_vnc/kasmvnc.yaml /etc/kasmvnc/
 
-### Install Printer and Network packages
-RUN apt-get install -y cups cups-client cups-pdf dbus iproute2 iptables
+### Install Printer and Network packages. cups-pdf was renamed to
+### printer-driver-cups-pdf in trixie; the old name is a transitional
+### package on bookworm/jammy/noble so picking the new name works for
+### all distros.
+RUN apt-get install -y cups cups-client printer-driver-cups-pdf dbus iproute2 iptables
 
 ### Qt6 xcb plugin runtime dependencies. The Ubuntu xfce install does
 ### not pull these in by default but the Qt6 platform plugin
