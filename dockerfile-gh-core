@@ -1,0 +1,259 @@
+#### Build Stage ####
+ARG BASE_IMAGE="ubuntu:24.04"
+FROM $BASE_IMAGE AS base_layer
+
+### Environment config
+ARG BG_IMG=gh_desktop.png
+ARG EXTRA_SH=noop.sh
+ARG DISTRO=ubuntu
+ARG LANG='en_US.UTF-8'
+ARG LANGUAGE='en_US:en'
+ARG LC_ALL='en_US.UTF-8'
+ARG TZ='Etc/UTC'
+ENV DEBIAN_FRONTEND=noninteractive \
+    DISTRO=$DISTRO \
+    HOME=/home/ghuser \
+    INST_SCRIPTS=/dockerstartup/install \
+    KASM_VNC_PATH=/usr/share/kasmvnc \
+    LANG=$LANG \
+    LANGUAGE=$LANGUAGE \
+    LC_ALL=$LC_ALL \
+    TZ=$TZ \
+    STARTUPDIR=/dockerstartup
+
+### Setup package rules (i.e. apt-get upgrade -y)
+COPY ./src/ubuntu/install/package_rules $INST_SCRIPTS/package_rules/
+RUN bash $INST_SCRIPTS/package_rules/package_rules.sh && rm -rf $INST_SCRIPTS/package_rules/
+
+### Install common tools. On Ubuntu 24.04 this script also userdel's
+### the default `ubuntu` user (uid 1000) for us — must run before we
+### claim uid 1000 for ghuser below.
+###
+### Patch out the `add-apt-repository ppa:kisak/turtle` mesa-update
+### step for non-noble Ubuntu — launchpad isn't reachable from our
+### build environment and the base distro mesa is sufficient for our
+### Qt6 / non-GPU workloads.
+COPY ./src/ubuntu/install/tools $INST_SCRIPTS/tools/
+RUN sed -i '/add-apt-repository ppa:kisak/d; /apt full-upgrade -y/d' \
+    $INST_SCRIPTS/tools/install_tools.sh && \
+    bash $INST_SCRIPTS/tools/install_tools.sh && \
+    rm -rf $INST_SCRIPTS/tools/
+
+### Create user and home directory
+RUN (groupadd -g 1000 ghuser \
+    && useradd -M -u 1000 -g 1000 ghuser \
+    && usermod -a -G ghuser ghuser) ; exit 0
+
+WORKDIR $HOME
+RUN mkdir -p $HOME/Desktop && \
+    mkdir -p $HOME/Downloads && \
+    mkdir -p $HOME/Workspace/AppData && \
+    mkdir -p $HOME/Workspace/Documents
+
+### Copy over the maximization script to our startup dir for use by app images.
+COPY ./src/ubuntu/install/maximize_script $STARTUPDIR/
+COPY ./src/gh/fullscreen_window.sh $STARTUPDIR/
+
+### Install custom fonts
+COPY ./src/ubuntu/install/fonts $INST_SCRIPTS/fonts/
+RUN bash $INST_SCRIPTS/fonts/install_custom_fonts.sh && rm -rf $INST_SCRIPTS/fonts/
+
+### Install xfce UI
+COPY ./src/ubuntu/install/xfce $INST_SCRIPTS/xfce/
+RUN bash $INST_SCRIPTS/xfce/install_xfce_ui.sh && rm -rf $INST_SCRIPTS/xfce/
+ADD ./src/gh/.config/ $HOME/.config/
+RUN mkdir -p /usr/share/extra/backgrounds/
+RUN mkdir -p /usr/share/extra/icons/
+ADD /src/common/resources/images/$BG_IMG  /usr/share/backgrounds/bg_default.png
+ADD /src/common/resources/images/icon_ubuntu.png /usr/share/extra/icons/icon_ubuntu.png
+ADD /src/common/resources/images/icon_ubuntu.png /usr/share/extra/icons/icon_default.png
+ADD /src/common/resources/images/egress_info.svg /usr/share/extra/icons/egress_info.svg
+ADD /src/common/resources/images/egress_error.svg /usr/share/extra/icons/egress_error.svg
+ADD /src/common/resources/images/egress_offline.svg /usr/share/extra/icons/egress_offline.svg
+
+### Install our build of KasmVNC (bring-your-own; built from the
+### KasmVNC fork via build_deb.sh ubuntu {noble,jammy}). Override the
+### deb source path via --build-arg KASMVNC_DEB=src/jammy/kasmvncserver.deb
+### when building the jammy variant. The deb also ships
+### /usr/bin/kasmvnc-open-url, an explicit wrapper that forwards a
+### URL via the openurl UnixRelay to the kasmweb client. Apps inside
+### the desktop call it directly when they want a link opened in the
+### user's native browser tab. We deliberately do *not* hook it into
+### xdg-open / mimeapps.list / xfce helpers — defaulting xdg-open to
+### the external browser breaks apps like VS Code that try to xdg-open
+### a 127.0.0.1 URL (devserver, debug page) and expect that to open
+### inside the container.
+ARG KASMVNC_DEB=src/kasmvncserver.deb
+COPY $KASMVNC_DEB $INST_SCRIPTS/kasmvncserver.deb
+RUN apt-get update && \
+    apt-get install -y gettext ssl-cert libxfont2 desktop-file-utils python3 && \
+    apt-get install -y $INST_SCRIPTS/kasmvncserver.deb && \
+    rm -f $INST_SCRIPTS/kasmvncserver.deb && \
+    update-desktop-database /usr/share/applications
+
+COPY ./src/common/install/kasm_vnc/kasmvnc.yaml /etc/kasmvnc/
+
+### Install Printer and Network packages
+RUN apt-get install -y cups cups-client cups-pdf dbus iproute2 iptables
+
+### Qt6 xcb plugin runtime dependencies. The Ubuntu xfce install does
+### not pull these in by default but the Qt6 platform plugin
+### (plugins/platforms/libqxcb.so) and the egl integration plugin
+### (plugins/xcbglintegrations/libqxcb-egl-integration.so) hard-link
+### against them. Without these VarSeq fails to load with
+### "could not load the Qt platform plugin xcb".
+RUN apt-get install -y \
+    libxcb-icccm4 \
+    libxcb-image0 \
+    libxcb-keysyms1 \
+    libxcb-render-util0
+
+### XFCE 4.20 upgrade. Build with --build-arg XFCE_420=true to enable.
+### Pulls from xubuntu-dev/experimental per
+### https://ubuntuhandbook.org/index.php/2024/12/install-xfce-4-20-ubuntu/
+### Disabled by default because the goldenhelix build network currently
+### blocks outbound to launchpad's CDN range (185.125.184.0/22).
+ARG XFCE_420=false
+RUN if [ "$XFCE_420" = "true" ]; then \
+      apt-get update && \
+      apt-get install -y software-properties-common && \
+      add-apt-repository -y ppa:xubuntu-dev/experimental && \
+      apt-get update && \
+      apt-get full-upgrade -y && \
+      apt-get install -y xfce4 xfwm4 xfce4-panel xfce4-session xfdesktop4 && \
+      apt-get clean && rm -rf /var/lib/apt/lists/* ; \
+    fi
+
+### Install bundled GTK / xfwm4 themes from src/themes/. The default
+### theme (xsettings.xml -> Net/ThemeName) is "Fake10 Light"; other
+### Fake10 variants are also included so the user can switch via
+### xfsettings without an additional download.
+COPY ./src/themes/Fake10-v6.tar.gz /tmp/fake10.tar.gz
+RUN mkdir -p /usr/share/themes /tmp/themes-extract && \
+    tar -xzf /tmp/fake10.tar.gz -C /tmp/themes-extract && \
+    cp -r "/tmp/themes-extract/Fake10/Themes/"* /usr/share/themes/ && \
+    rm -rf /tmp/themes-extract /tmp/fake10.tar.gz && \
+    \
+    # Fake10 Light's xfwm4 themerc sets title_horizontal_offset=-10
+    # which pushes the title text against the left edge and clips the
+    # leading character. The themerc value takes precedence over our
+    # xfconf setting, so patch it to a positive offset directly.
+    for t in "Fake10" "Fake10 Light" "Fake10 Accent Color" "Fake10 Light Accent Color"; do \
+        if [ -f "/usr/share/themes/$t/xfwm4/themerc" ]; then \
+            sed -i 's/^title_horizontal_offset=.*/title_horizontal_offset=4/' \
+                "/usr/share/themes/$t/xfwm4/themerc"; \
+        fi; \
+    done
+
+### Install elementary-xfce icon theme (set as default in
+### xsettings.xml -> Net/IconThemeName). gtk-update-icon-cache must
+### run after install or apps emit "no cache file exists" warnings.
+RUN apt-get install -y elementary-xfce-icon-theme && \
+    gtk-update-icon-cache -f /usr/share/icons/elementary-xfce 2>/dev/null || true
+
+### Install mousepad text editor (better than vim)
+RUN apt-get install -y mousepad && \
+    mkdir -p $HOME/.local/share/applications/ && \
+    echo '[Default Applications]' > $HOME/.local/share/applications/mimeapps.list && \
+    echo 'text/plain=mousepad.desktop' >> $HOME/.local/share/applications/mimeapps.list && \
+    echo '' >> $HOME/.local/share/applications/mimeapps.list && \
+    echo '[Added Associations]' >> $HOME/.local/share/applications/mimeapps.list && \
+    echo 'text/plain=mousepad.desktop;' >> $HOME/.local/share/applications/mimeapps.list
+
+### Bundled custom icons (see src/common/install/icons/README.md). Drop
+### SVGs/PNGs under src/common/install/icons/hicolor/<size>/apps/ and
+### they end up at /usr/share/icons/hicolor/... in the image.
+### gtk-update-icon-cache regenerates the index so apps see them.
+COPY ./src/common/install/icons/hicolor/ /usr/share/icons/hicolor/
+RUN gtk-update-icon-cache -f /usr/share/icons/hicolor 2>/dev/null || true
+
+### Install custom cursors
+COPY ./src/ubuntu/install/cursors $INST_SCRIPTS/cursors/
+RUN bash $INST_SCRIPTS/cursors/install_cursors.sh && rm -rf $INST_SCRIPTS/cursors/
+
+### configure startup
+ADD ./src/common/startup_scripts $INST_SCRIPTS
+# *GH* override vnc_startup.sh with the simpler one used in app-streaming
+COPY ./src/gh/vnc_startup.sh $STARTUPDIR
+RUN bash $INST_SCRIPTS/set_user_permission.sh $STARTUPDIR $HOME && \
+    echo 'export PS1="$USERNAME:\w\$ "' >> $HOME/.bashrc
+
+### VirtualGL
+COPY ./src/ubuntu/install/virtualgl $INST_SCRIPTS/virtualgl/
+RUN bash $INST_SCRIPTS/virtualgl/install_virtualgl.sh && rm -rf $INST_SCRIPTS/virtualgl/
+
+### Custom Folder Emblems (VarSeq emblem)
+COPY ./src/ubuntu/install/emblems $INST_SCRIPTS/emblems/
+RUN bash $INST_SCRIPTS/emblems/install_vs_emblem.sh && rm -rf $INST_SCRIPTS/emblems/
+
+RUN chown -R 1000:0 $HOME
+
+### FIX PERMISSIONS
+RUN touch $STARTUPDIR/wm.log \
+    && touch $STARTUPDIR/window_manager_startup.log \
+    && touch $STARTUPDIR/vnc_startup.log \
+    && touch $STARTUPDIR/no_vnc_startup.log \
+    && chown -R root:root $STARTUPDIR \
+    && find $STARTUPDIR -type d -exec chmod 755 {} \; \
+    && find $STARTUPDIR -type f -exec chmod 644 {} \; \
+    && find $STARTUPDIR -type f -iname "*.sh" -exec chmod 755 {} \; \
+    && find $STARTUPDIR -type f -iname "*.py" -exec chmod 755 {} \; \
+    && find $STARTUPDIR -type f -iname "*.rb" -exec chmod 755 {} \; \
+    && find $STARTUPDIR -type f -iname "*.pl" -exec chmod 755 {} \; \
+    && find $STARTUPDIR -type f -iname "*.log" -exec chmod 666 {} \; \
+    && rm -rf $STARTUPDIR/install \
+    && chown -R root:root /usr/local/bin \
+    && rm -Rf /home/kasm-default-profile/.launchpadlib
+
+### Cleanup job
+COPY ./src/ubuntu/install/cleanup $INST_SCRIPTS/cleanup/
+RUN bash $INST_SCRIPTS/cleanup/cleanup.sh && rm -rf $INST_SCRIPTS/cleanup/
+
+#### Runtime Stage ####
+FROM scratch
+COPY --from=base_layer / /
+
+### Labels
+LABEL "org.opencontainers.image.authors"='Golden Helix "support@goldenhelix.com"'
+
+### Environment config
+ARG DISTRO=ubuntu
+ARG EXTRA_SH=noop.sh
+ARG LANG='en_US.UTF-8'
+ARG LANGUAGE='en_US:en'
+ARG LC_ALL='en_US.UTF-8'
+ARG START_XFCE4=1
+ARG TZ='Etc/UTC'
+ENV DEBIAN_FRONTEND=noninteractive \
+    DISPLAY=:1 \
+    DISTRO=$DISTRO \
+    GOMP_SPINCOUNT=0 \
+    HOME=/home/ghuser \
+    USERNAME=ghuser \
+    INST_SCRIPTS=/dockerstartup/install \
+    KASM_VNC_PATH=/usr/share/kasmvnc \
+    LANG=$LANG \
+    LANGUAGE=$LANGUAGE \
+    LC_ALL=$LC_ALL \
+    MAX_FRAME_RATE=24 \
+    NO_VNC_PORT=6901 \
+    OMP_WAIT_POLICY=PASSIVE \
+    SHELL=/bin/bash \
+    STARTUPDIR=/dockerstartup \
+    START_XFCE4=$START_XFCE4 \
+    SINGLE_APPLICATION=0 \
+    TERM=xterm \
+    VNC_COL_DEPTH=24 \
+    VNCOPTIONS="-PreferBandwidth -DynamicQualityMin=4 -DynamicQualityMax=7 -DLP_ClipDelay=0" \
+    VNC_USER=ghuser \
+    VNC_PW=vncpassword \
+    VNC_RESOLUTION=1280x720 \
+    TZ=$TZ
+
+### Ports and user
+EXPOSE $NO_VNC_PORT
+WORKDIR $HOME
+USER 1000
+
+ENTRYPOINT ["/dockerstartup/vnc_startup.sh"]
+CMD ["--wait"]
