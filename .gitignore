@@ -2,6 +2,7 @@ target
 .idea
 *.iml
 *.log
+__pycache__/
 # kasmvncserver.deb is a build artifact staged by ../KasmVNC/build_deb.sh.
 # Don't commit it.
 src/kasmvncserver.deb

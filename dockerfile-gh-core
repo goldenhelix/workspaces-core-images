@@ -154,6 +154,15 @@ RUN mkdir -p /usr/share/themes /tmp/themes-extract && \
         fi; \
     done
 
+# Widen the Fake10 left/right/bottom resize-edge XPMs from 1px to 4px.
+# xfwm4 derives the resize-grab zone from the border image dimensions
+# (so a 1px-wide left.xpm gives you a 1px hit zone, which is brutal on
+# a remote desktop). The 3 extra pixels are transparent and rendered
+# toward the outside of the window — visible chrome stays a 1px line at
+# the window-adjacent edge, but the click target is now 4px.
+COPY ./src/gh/fake10_widen_borders.py /tmp/fake10_widen_borders.py
+RUN python3 /tmp/fake10_widen_borders.py && rm /tmp/fake10_widen_borders.py
+
 ### Install elementary-xfce icon theme (set as default in
 ### xsettings.xml -> Net/IconThemeName). gtk-update-icon-cache must
 ### run after install or apps emit "no cache file exists" warnings.
@@ -257,7 +266,16 @@ ENV DEBIAN_FRONTEND=noninteractive \
     VNC_USER=ghuser \
     VNC_PW=vncpassword \
     VNC_RESOLUTION=1280x720 \
-    TZ=$TZ
+    TZ=$TZ \
+    \
+    # Disable client-side decorations so all GTK apps (including
+    # Thunar's body, file dialogs, mousepad, etc.) use xfwm4-drawn
+    # borders. Without this, GTK 3+ apps draw their own chrome and
+    # bypass the theme entirely — meaning our widened resize edges
+    # are ignored. GDK_CSD_DISABLE is the modern variant; both are
+    # honored by GTK depending on version.
+    GTK_CSD=0 \
+    GDK_BACKEND=x11
 
 ### Ports and user
 EXPOSE $NO_VNC_PORT
