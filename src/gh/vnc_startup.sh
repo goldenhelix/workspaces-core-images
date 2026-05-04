@@ -41,9 +41,26 @@ add_vnc_user "$VNC_USER" "$VNC_PW" "-wo"
 unset VNC_PW # don't need it anymore
 chmod 0600 $HOME/.kasmpasswd
 
-# if IDLE_TIMEOUT env variable is set, write a user config file (read after the system /etc/kasmvnc.yaml)
+# Pre-write ~/.vnc/kasmvnc.yaml with sane defaults BEFORE kasmvncserver
+# runs. The perl wrapper otherwise drops in its hard-coded default (see
+# unix/vncserver:1216) which sets logging.level=100 — that emits per-
+# frame [DEBUG] SoftwareEncoder spam in the container log.
+#
+# level=10 here keeps connect/disconnect events + warnings + errors but
+# drops the per-frame trace lines. Bump KASMVNC_VERBOSE_LOGGING in the
+# environment for the chatty version.
+LOG_LEVEL=10
+[ -n "$KASMVNC_VERBOSE_LOGGING" ] && LOG_LEVEL=100
+
+cat <<EOF > $HOME/.vnc/kasmvnc.yaml
+logging:
+  log_writer_name: all
+  log_dest: logfile
+  level: $LOG_LEVEL
+EOF
+
 if [ -n "$IDLE_TIMEOUT" ]; then
-  cat <<EOF > $HOME/.vnc/kasmvnc.yaml
+  cat <<EOF >> $HOME/.vnc/kasmvnc.yaml
 server:
   auto_shutdown:
     no_user_session_timeout: $IDLE_TIMEOUT
@@ -122,7 +139,14 @@ fi
 ) &
 
 echo "Starting window manager XFCE..."
-DISPLAY=:1 /usr/bin/startxfce4 --replace &
+# Filter known harmless XFCE noise from stderr:
+#  - xfdesktop "Failed to get system bus": xfdesktop probes the system
+#    DBus on every screen-size change. We only run a session bus inside
+#    the container; no system bus is needed for any feature we use.
+#  - "Xlib: extension DPMS missing": Xvnc doesn't load the DPMS extension,
+#    so xset -dpms (and the resize-triggered DPMS probes) emit this. The
+#    underlying screensaver/blank disables (xset s noblank/off) still work.
+DISPLAY=:1 /usr/bin/startxfce4 --replace 2> >(grep --line-buffered -vE 'Failed to get system bus|extension "DPMS" missing|^[[:space:]]*$' >&2) &
 PID_SUB=$!
 
 # Mark all .desktop launchers as trusted so XFCE 4.18+ doesn't pop the
@@ -148,7 +172,9 @@ PID_SUB=$!
 ) &
 
 ### disable screen saver and power management
-xset -dpms &
+# Xvnc doesn't load the DPMS extension; suppress the Xlib warning.
+# xset s noblank/off still work and disable the actual screen blanker.
+xset -dpms 2>/dev/null &
 xset s noblank &
 xset s off &
 # xset q # debug xset settings
