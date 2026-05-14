@@ -102,17 +102,19 @@ vncserver -kill $DISPLAY &> $HOME/.vnc/vnc_startup.log \
 
 [ -n "$KASMVNC_VERBOSE_LOGGING" ] && verbose_logging_option="-debug"
 
-# UnixRelay sockets — see KasmVNC repo unix/{openurl,download,upload}/README.md.
-#   openurl  : kasmvnc-open-url  → kasmweb opens link in user's browser
+# UnixRelay sockets — see KasmVNC repo unix/{openurl,download,upload,host}/README.md.
+#   openurl  : kasmvnc-open-url    → kasmweb opens link in user's browser
 #   download : kasmvnc-file-download → kasmweb triggers <a download> click
 #   upload   : kasmvnc-upload-daemon ← kasmweb sends bytes after drag-drop
+#   host     : kasmvnc-host          → kasmweb forwards JSON to parent iframe
 DISPLAY_NUM="${DISPLAY#:}"
 OPENURL_SOCK="/tmp/kasmvnc-openurl-${DISPLAY_NUM}.sock"
 DOWNLOAD_SOCK="/tmp/kasmvnc-download-${DISPLAY_NUM}.sock"
 UPLOAD_SOCK="/tmp/kasmvnc-upload-${DISPLAY_NUM}.sock"
-rm -f "$OPENURL_SOCK" "$DOWNLOAD_SOCK" "$UPLOAD_SOCK"
+HOST_SOCK="/tmp/kasmvnc-host-${DISPLAY_NUM}.sock"
+rm -f "$OPENURL_SOCK" "$DOWNLOAD_SOCK" "$UPLOAD_SOCK" "$HOST_SOCK"
 
-vncserver $DISPLAY -select-de manual -depth $VNC_COL_DEPTH -geometry $VNC_RESOLUTION -FrameRate=$MAX_FRAME_RATE -websocketPort $NO_VNC_PORT -sslOnly -interface 0.0.0.0 -BlacklistThreshold=0 -FreeKeyMappings -UnixRelay openurl:"$OPENURL_SOCK" -UnixRelay download:"$DOWNLOAD_SOCK" -UnixRelay upload:"$UPLOAD_SOCK" $VNCOPTIONS $verbose_logging_option &> $STARTUPDIR/no_vnc_startup.log
+vncserver $DISPLAY -select-de manual -depth $VNC_COL_DEPTH -geometry $VNC_RESOLUTION -FrameRate=$MAX_FRAME_RATE -websocketPort $NO_VNC_PORT -sslOnly -interface 0.0.0.0 -BlacklistThreshold=0 -FreeKeyMappings -UnixRelay openurl:"$OPENURL_SOCK" -UnixRelay download:"$DOWNLOAD_SOCK" -UnixRelay upload:"$UPLOAD_SOCK" -UnixRelay host:"$HOST_SOCK" $VNCOPTIONS $verbose_logging_option &> $STARTUPDIR/no_vnc_startup.log
 
 # Seed the user's Thunar custom-actions file with our "Download" entry
 # (right-click on a file/folder → Download → triggers kasmvnc-file-download).
