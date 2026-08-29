@@ -8,3 +8,6 @@ __pycache__/
 src/kasmvncserver.deb
 src/trixie/kasmvncserver.deb
 src/jammy/kasmvncserver.deb
+# Written by build-*.sh as the date suffix of the latest successful build
+# (e.g. 260519). Read by downstream (office-web) to pin a specific core tag.
+LAST_BUILD.tag
