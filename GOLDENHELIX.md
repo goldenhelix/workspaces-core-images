@@ -26,6 +26,11 @@ that we've adapted to:
 
 - Long-lived branch: **`goldenhelix-master-20260430`** in
   `goldenhelix/workspaces-core-images` (after fork).
+- Pairs with `KasmVNC` branch **`goldenhelix-master-20260828`**
+  (`kasmvncserver 1.5.1~gh.20260828-1`). This repo is not rebased on the
+  KasmVNC cadence — it only consumes the deb — but the FFmpeg package
+  names above are tied to the KasmVNC builder image, so re-check them
+  after any KasmVNC rebase.
 - Forked from `kasmtech/workspaces-core-images` `develop` (the only
   branch with a 24.04+ base; commit `ca4eedc` "KASM-7900 Update OS
   Versions"). We don't track that branch anymore — we follow Debian
@@ -107,6 +112,17 @@ container:
 - **Renames `cups-pdf` → `printer-driver-cups-pdf`** (cups-pdf gone in trixie; transitional on bookworm).
 - **Adds Qt6 xcb plugin runtime libs**: `libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0`. Without these, VarSeq fails with "could not load the Qt platform plugin xcb".
 - **Installs `kasmvncserver.deb`** from `src/trixie/` (built externally, see `../KasmVNC/`).
+- **Installs `libavformat61` + `libswscale8`** — required for KasmVNC's
+  video streaming modes. KasmVNC `dlopen()`s the FFmpeg libraries by
+  exact SONAME major (baked in from the builder image's headers) and does
+  *not* declare them as deb dependencies. `libavcodec.so.61` and
+  `libavutil.so.59` arrive transitively via other packages;
+  `libavformat.so.61` and `libswscale.so.8` do not. Without them Xvnc logs
+  `[PRIO] ffmpeg: Could not open libavformat.so.61` once at startup and
+  then silently serves JPEG/WEBP only — every H.264/H.265/AV1 mode
+  disabled, with nothing surfaced to the user. Costs ~10MB. **If the
+  builder image's FFmpeg major versions change, these package names must
+  change with them.**
 - **Bundles `Fake10` GTK theme** from `src/themes/Fake10-v6.tar.gz`. Patches the xfwm4 themerc to fix `title_horizontal_offset=-10` → `4`.
 - **Installs `elementary-xfce-icon-theme`** + runs `gtk-update-icon-cache`.
 - **Bundles custom hicolor icons** from `src/common/install/icons/hicolor/` and rebuilds the cache. (Empty by default; drop SVGs/PNGs in there per the README.)

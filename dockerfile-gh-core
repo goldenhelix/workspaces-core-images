@@ -91,8 +91,21 @@ ADD /src/common/resources/images/egress_offline.svg /usr/share/extra/icons/egres
 ### inside the container.
 ARG KASMVNC_DEB=src/kasmvncserver.deb
 COPY $KASMVNC_DEB $INST_SCRIPTS/kasmvncserver.deb
+###
+### libavformat61 + libswscale8 are required for KasmVNC's video streaming
+### modes (H.264 / H.265 / AV1, software and VAAPI). KasmVNC dlopen()s the
+### FFmpeg libraries by exact SONAME major -- the majors are baked in from
+### the headers in the builder image -- and it does NOT declare them as deb
+### dependencies. libavcodec.so.61 and libavutil.so.59 already arrive
+### transitively via other packages, but libavformat and libswscale do not,
+### so without these two the server logs
+###     [PRIO] ffmpeg: Could not open libavformat.so.61
+### at startup and silently falls back to JPEG/WEBP for every client --
+### every video mode disabled, no error surfaced to the user.
+### Costs ~10MB. Keep the majors in step with builder/dockerfile.debian_trixie.build.
 RUN apt-get update && \
     apt-get install -y gettext ssl-cert libxfont2 desktop-file-utils python3 && \
+    apt-get install -y --no-install-recommends libavformat61 libswscale8 && \
     apt-get install -y $INST_SCRIPTS/kasmvncserver.deb && \
     rm -f $INST_SCRIPTS/kasmvncserver.deb && \
     update-desktop-database /usr/share/applications
