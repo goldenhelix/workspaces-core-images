@@ -245,11 +245,26 @@ if [[ "${DISTRO}" != @(oracle8|fedora42|fedora43|oracle9|rhel9|rockylinux9|rocky
   fi
 fi
 
-# Override default login script so users cant log themselves out of the desktop dession
-cat >/usr/bin/xfce4-session-logout <<EOL
-#!/usr/bin/env bash
-notify-send "Logout" "Please logout or destroy this desktop using the Kasm Control Panel" -i /usr/share/icons/ubuntu-mono-dark/actions/22/system-shutdown-panel-restart.svg
-EOL
+# *GH*: Upstream Kasm replaces /usr/bin/xfce4-session-logout here with a
+# notify-send-only stub ("Please logout or destroy this desktop using
+# the Kasm Control Panel") so users can't end the session from XFCE.
+# We want the opposite — vs_custom_startup.sh calls
+# `xfce4-session-logout --logout --fast` after the monitored app
+# (VarSeq) exits, and that needs to ACTUALLY end the session so the
+# container exits with code 0 (cleanly via orderly XSMP shutdown — the
+# real binary's D-Bus Logout path runs SmDie against each client, so
+# clients (xfdesktop, xfwm4, xfce4-panel, xfsettingsd) close their X
+# displays without the libxfce4ui "ICE I/O Error" warnings that a
+# direct SIGTERM produces). Leaving the real binary in place is what
+# appstream-core-images does too.
+#
+# Caveat: the real CLI does an org.xfce.SessionManager.IsIdle precheck
+# and refuses with "Session manager must be in idle state" if any
+# XSMP client is still in-progress. That's fine for our production
+# path (vs_custom_startup pgrep's VarSeq.bin gone first), but it does
+# mean an in-app "Logout" menu click while VarSeq is still running
+# will fail with that GDBus error. Address that at the menu-config
+# level (hide/disable logout items) rather than by clobbering the CLI.
 
 # Add a script for launching Thunar with libnss wrapper.
 # This is called by ~.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-session.xml
